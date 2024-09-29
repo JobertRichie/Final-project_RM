@@ -1,0 +1,541 @@
+---
+title: "GLOBAL TRENDS IN CHILD MORTALITY (0-5 years old)"
+author: "By Jobert Richie Nansseu"
+logo: images/Logo_SDGs.jpg
+format: 
+  dashboard:
+    nav-buttons: [github]
+    github: https://github.com/JobertRichie
+theme: yeti
+execute: 
+  echo: false
+  warning: false
+  message: false
+---
+
+<style>
+body {
+text-align: justify}
+</style>
+
+```{r}
+#Loading the required packages
+if(!require(pacman)) install.packages("pacman")
+pacman::p_load(tidyverse,
+               here,
+               visdat,
+               inspectdf,
+               janitor,
+               reactable, 
+               gganimate,
+               plotly,
+               sf,
+               rnaturalearth,
+               bslib,
+               bsicons, 
+               shiny,
+               countrycode,
+               htmltools,
+               ggspatial,
+               tools,
+               colorspace,
+               gganimate,
+               viridis
+               )
+
+#Set themes for ggplots
+theme_set(theme_grey())
+```
+
+```{r}
+#Importation of the different datasets: of note, these datasets have been retrieved from the Gapminder website (https://www.gapminder.org/data/)
+
+## There are six datasets that we are going to import at once using a for loop
+
+### 1. Extract paths for all .csv files in the data folder
+data_paths <- list.files(here("data"),
+                         pattern = "*.csv",
+                         full.names = TRUE)
+
+### 2. Create vector of data frame names
+data_names <- file_path_sans_ext(basename(data_paths))
+
+### 3. Read the CSV files into R using a for loop
+for (i in 1:length(data_paths)) {
+  assign(data_names[i], read_csv(data_paths[i]))
+}
+```
+
+```{r include=FALSE}
+# Data exploration and diagnostics
+str(child_mortality_0_5_year_olds)
+## This shows that the country variable is chr while the others are numeric
+visdat::vis_dat(child_mortality_0_5_year_olds)
+# ## This shows very few missing data, which can be complemented with the following plot
+inspect_num(child_mortality_0_5_year_olds) %>%
+  show_plot()
+
+str(children_per_woman_total_fertility)
+str(daily_income)
+str(gdp_pcap) ##Several columns are characters
+str(pop)  ##several columns are characters; hence there is need to transform them
+```
+
+```{r include=FALSE}
+# Data manipulation and transformation
+## Transforming character variables containing values into numeric ones, for gdp and pop datasets
+
+gdp_pcap_new <- gdp_pcap %>% 
+  mutate(country = as.factor(country)) %>% 
+  mutate_if(.predicate = is.character,
+            .funs = ~str_replace_all(.,
+                                     pattern = "k",
+                                     replacement = "e3") %>% 
+             str_replace_all(pattern = "M",
+                             replacement = "e6") %>% 
+             as.numeric())
+### Verification
+vis_dat(gdp_pcap)
+vis_dat(gdp_pcap_new)
+
+
+pop_new <- pop %>% 
+  mutate(country = as.factor(country)) %>% 
+  mutate_if(.predicate = is.character,
+            .funs = ~str_replace_all(.,
+                                     pattern = "k",
+                                     replacement = "e3") %>% 
+             str_replace_all(pattern = "M",
+                             replacement = "e6") %>% 
+             as.numeric())
+### Verification
+vis_dat(pop)
+vis_dat(pop_new)
+
+## Pivoting our datasets into long formats: although the data run until 2100, we will limit our analyses up to 2023 (column 225)
+
+child_mortality <- child_mortality_0_5_year_olds %>% 
+  pivot_longer(cols = 2:302,
+               names_to = "year",
+               values_to = "child_mortality")
+
+total_fertility <- children_per_woman_total_fertility %>% 
+  pivot_longer(cols = 2:302,
+               names_to = "year",
+               values_to = "fertility_rate")
+
+daily_income_pcp <- daily_income %>% 
+  pivot_longer(cols = 2:302,
+               names_to = "year",
+               values_to = "daily_income")
+
+gdp_pcp <- gdp_pcap_new %>% 
+  pivot_longer(cols = 2:302,
+               names_to = "year",
+               values_to = "gdp")
+
+population <- pop_new %>% 
+  pivot_longer(cols = 2:302,
+               names_to = "year",
+               values_to = "total_population")
+
+## Merging the five datasets into one: Considering that all these datasets come from the same source, we anticipate the the names of countries are written the same way, which we can use as the joining variable. Using setdiff(), we verified and confirmed this asumption. We will use a left_join() and limit our analyses to the period 1800-2023
+
+child_mortality_analysis <- child_mortality %>% 
+  left_join(total_fertility,
+            by = join_by(country, year)) %>% 
+  left_join(daily_income_pcp,
+            by = join_by(country, year)) %>% 
+  left_join(gdp_pcp,
+            by = join_by(country, year)) %>% 
+  left_join(population,
+            by = join_by(country, year)) %>% 
+  filter(year %in% c(2001:2023))
+
+```
+
+```{r}
+# For the value boxes, we will calculate some indicators for the year 2023
+## Extract Highest child mortality in 2023
+highest_child_mortality <- child_mortality_analysis %>% 
+  filter(year == 2023) %>% 
+  select(country, child_mortality) %>% 
+  arrange(desc(child_mortality)) %>% 
+  head(1) %>% 
+  pull(child_mortality)
+## Extract Country with highest child mortality rate in 2023
+country_highest_cm <- child_mortality_analysis %>% 
+  filter(year == 2023) %>% 
+  select(country, child_mortality) %>% 
+  arrange(desc(child_mortality)) %>% 
+  head(1) %>% 
+  pull(country)
+## Extract lowest child mortality in 2023
+lowest_child_mortality <- child_mortality_analysis %>% 
+  filter(year == 2023) %>% 
+  select(country, child_mortality) %>% 
+  arrange(child_mortality) %>% 
+  head(1) %>% 
+  pull(child_mortality) %>% 
+  round(1)
+## Extract country with lowest child mortality in 2023
+country_lowest_cm <- child_mortality_analysis %>% 
+  filter(year == 2023) %>% 
+  select(country, child_mortality) %>% 
+  arrange(child_mortality) %>% 
+  head(1) %>% 
+  pull(country)
+## Extracting the number of countries not meeting SDG 3.2 target
+number_not_meeting_SDG_target <- child_mortality_analysis %>% ## SDG 3.2: under-5 mortality rate equal or lower to 25/1000 live births
+  filter(year == 2023 & child_mortality > 25) %>% 
+  nrow()
+## Populating the continents to which these countries belong
+continent_not_meeting_SDG_target <- child_mortality_analysis %>% ## SDG 3.2: under-5 mortality rate equal or lower to 25/1000 live births
+  filter(year == 2023 & child_mortality > 25) %>% 
+  mutate(continent = 
+           countrycode(country, "country.name", "continent")) %>%
+  count(continent) %>% 
+  mutate(pct = n*100/sum(n)) %>% 
+  head(1) %>% 
+  pull(continent) ## First continent with majority of countries not meeting SDG 3.2 target
+## Extracting the percentage of countries belonging to the first continent that do not meet SDG 3.2
+continent_not_meeting_SDG_target_pct <- child_mortality_analysis %>% ## SDG 3.2: under-5 mortality rate equal or lower to 25/1000 live births
+  filter(year == 2023 & child_mortality > 25) %>% 
+  mutate(continent = 
+           countrycode(country, "country.name", "continent")) %>%
+  count(continent) %>% 
+  mutate(pct = n*100/sum(n)) %>% 
+  head(1) %>% 
+  pull(pct) %>% 
+  round(1)
+```
+
+```{r include=FALSE}
+#Building a choroplet map showing the spatial distribution and evolution of child mortality rates over time 
+
+## Importation of countries' shapefiles
+countries <- ne_countries(returnclass = "sf")
+
+## To join the shapefiles with the data we need to create the countrycode variable which will be used for joining
+child_mortality_analysis <- child_mortality_analysis %>% 
+  mutate(country_code = countrycode(
+    sourcevar = country,
+    origin = "country.name",
+    destination = "iso3c"))
+
+## Identifying mismatches between the joining variables
+setdiff(child_mortality_analysis$country_code,
+        countries$adm0_a3) 
+### using the anti_join() function
+child_mortality_analysis %>% 
+  filter(year == 2023) %>% 
+  anti_join(countries,
+            by = c("country_code" = "adm0_a3")
+          ) %>% 
+  select(country, country_code)
+
+## Cleaning the countries data
+countries <- countries %>% 
+  mutate(adm0_a3 = case_match(
+    adm0_a3,
+    "SDS" ~ "SSD",
+    "PSX" ~ "PSE",
+    "SAH" ~ "MAR",
+    .default = adm0_a3
+  ))
+
+setdiff(child_mortality_analysis$country_code,
+        countries$adm0_a3) 
+
+## Joining the data sets with a left_join()
+child_mortality_analysis_shp <- 
+  countries %>% 
+  left_join(child_mortality_analysis,
+             by = join_by(adm0_a3 == country_code))
+### Verifying that we have obtained a sf object
+class(child_mortality_analysis_shp)
+
+## Adding the tooltip variable for label purposes
+child_mortality_analysis_shp <- 
+  child_mortality_analysis_shp %>% 
+  mutate(tooltip_label = paste0(country,
+                                " - U5MR: ",
+                                child_mortality))
+
+## Building the map
+map_plot <- 
+  ggplot(data = child_mortality_analysis_shp) +
+  geom_sf(mapping = aes(fill = child_mortality,
+                        frame = year,
+                        text = tooltip_label)) +
+  scale_fill_distiller(palette = "YlOrBr", 
+                       direction = 1) +
+  annotation_north_arrow(location = "bl", 
+                         which_north = "true") +
+  annotation_scale(location = "br", 
+                   width_hint = 0.5) +
+  guides(fill = "none") + 
+  labs(caption = "Source: https://www.gapminder.org/data/")
+
+#Interactive map
+map_plotly <- ggplotly(map_plot,
+                       tooltip = "text")
+```
+
+```{r}
+#Plotting the top 20 countries with the highest mortality rates in 2023
+top_20_countries <- 
+  child_mortality_analysis_shp %>%
+  filter(year == 2023) %>% 
+  arrange(desc(child_mortality)) %>% 
+  head(20) %>% 
+  ggplot(mapping = aes(y = country,
+                       x = child_mortality,
+                       fill = country,
+                       text = tooltip_label)) +
+  geom_col() +
+  geom_text(aes(label = child_mortality),
+            color = "black",
+            size = 3,
+            hjust = -0.5,
+            fontface = "bold") +
+  theme(legend.position = "none") +
+  labs(x = "Child mortality rate, per 1000 live births",
+       y = "Country",
+       caption = "Source: https://www.gapminder.org/data/")
+
+#Interactive plot
+top_20_plotly <- ggplotly(top_20_countries,
+                          tooltip = "text")
+```
+
+```{r}
+# Building a plot showing the relationship between child mortality and fertility rate, using a geom_point
+## Creating a variable for swift labeling
+child_mortality_analysis_shp <- 
+  child_mortality_analysis_shp %>% 
+  mutate(tooltip_label_2 = 
+           paste0(country,
+                  " - U5MR: ",
+                  child_mortality,
+                  "; FR: ",
+                  fertility_rate))
+
+##Building the plot
+plot_mortality_fr <- 
+  ggplot(data = child_mortality_analysis_shp,
+         mapping = aes(x = child_mortality,
+                       y = fertility_rate,
+                       frame = year,
+                       size = total_population,
+                       colour = adm0_a3,
+                       text = str_wrap(tooltip_label_2,
+                                       width = 10))) +
+  geom_point(alpha = 0.7) +
+  scale_x_log10() +
+  labs(x = "Child mortality rate, per 1000 live births",
+       y = "Total fertility rate",
+       size = "Country's population",
+       caption = "Source: https://www.gapminder.org/data/") +
+  theme(legend.position = "none") 
+
+## Interactive plot
+plotly_mortality_fr <- ggplotly(plot_mortality_fr,
+                                 tooltip = "text")
+```
+
+```{r}
+# Building a plot showing the relationship between child mortality and GDP per capita, using geom_point
+## Creating a variable for swift labeling
+child_mortality_analysis_shp <- 
+  child_mortality_analysis_shp %>% 
+  mutate(tooltip_label_3 = 
+           paste0(country,
+                  " - U5MR: ",
+                  child_mortality,
+                  "; GDP: ",
+                  gdp))
+
+##Building the plot
+plot_mortality_gdp <- 
+  ggplot(data = child_mortality_analysis_shp,
+         mapping = aes(x = child_mortality,
+                       y = gdp,
+                       frame = year,
+                       size = total_population,
+                       colour = adm0_a3,
+                       text = str_wrap(tooltip_label_3,
+                                       width = 10))) +
+  geom_point(alpha = 0.7) +
+  scale_x_log10() +
+  labs(x = "Child mortality rate, per 1000 live births",
+       y = "Gross Domestic Product, per capita",
+       size = "Country's population",
+       caption = "Source: https://www.gapminder.org/data/") +
+  theme(legend.position = "none")
+
+## Interactive plot
+plotly_mortality_gdp <- ggplotly(plot_mortality_gdp,
+                                 tooltip = "text")
+```
+
+```{r}
+# Building a plot showing the relationship between child mortality and daily income, using a geom_point
+## Creating a variable for swift labeling
+child_mortality_analysis_shp <- 
+  child_mortality_analysis_shp %>% 
+  mutate(tooltip_label_4 = 
+           paste0(country,
+                  " - U5MR: ",
+                  child_mortality,
+                  "; DI: $",
+                  daily_income))
+
+##Building the plot
+plot_mortality_di <- 
+  ggplot(data = child_mortality_analysis_shp,
+         mapping = aes(x = child_mortality,
+                       y = daily_income,
+                       frame = year,
+                       size = total_population,
+                       colour = adm0_a3,
+                       text = str_wrap(tooltip_label_2,
+                                       width = 10))) +
+  geom_point(alpha = 0.7) +
+  scale_x_log10() +
+  labs(x = "Child mortality rate, per 1000 live births",
+       y = "Average daily income, in USD/person/day ",
+       size = "Country's population",
+       caption = "Source: https://www.gapminder.org/data/") +
+  theme(legend.position = "none") 
+
+## Interactive plot
+plotly_mortality_di <- ggplotly(plot_mortality_di,
+                                 tooltip = "text")
+```
+
+# MAJOR TRENDS IN CHILD MORTALITY RATE OVER TIME
+
+## Row1 {height=30%}
+
+```{r}
+value_box(
+  title = "Highest child mortality rate in 2023 (per 1000 live births)",
+  value = highest_child_mortality,
+  showcase = bsicons::bs_icon("thermometer-high"),
+  theme = value_box_theme(bg = "#f01d16"),
+  p(paste0("Country: ", country_highest_cm))
+)
+```
+
+```{r}
+value_box(
+  title = "Lowest child mortality rate in 2023 (per 1000 live births)",
+  value = lowest_child_mortality,
+  showcase = bsicons::bs_icon("thermometer-low"),
+  theme = "bg-success",
+  p(paste0("Country: ", country_lowest_cm))
+)
+```
+
+```{r}
+value_box(
+  title = str_wrap("Number of countries under the SDG 3.2 target in 2023: child mortality <= 25/1000",
+                   width = 20),
+  value = number_not_meeting_SDG_target,
+  showcase = bsicons::bs_icon("globe-europe-africa"),
+  theme = "bg-gradient-indigo-blue",
+  p(paste0(continent_not_meeting_SDG_target_pct, "% of these countries reside in ", continent_not_meeting_SDG_target))
+)
+```
+
+## Row 2 {height=70%}
+
+### Column 1 {width=70%}
+
+```{r title="Spatial distribution of child mortality rates over time"}
+map_plotly
+```
+
+### Column 2 [width=30%]
+
+```{r title="Top 20 countries with the highest child mortality rates in 2023"}
+top_20_plotly
+```
+
+# CHILD MORTALITY VS FERTILITY RATE, GDP, AND DAILY INCOME 
+
+## {.tabset}
+
+### CHILD MORTALITY RATE VS FERTILITY RATE
+
+```{r title="Relationship between child mortality rate and fertility rate"}
+plotly_mortality_fr
+```
+
+### CHILD MORTALITY RATE VS GDP per capita
+
+```{r title="Relationship between child mortality rate and GDP per capita"}
+plotly_mortality_gdp
+```
+
+### CHILD MORTALITY RATE VS DAILY INCOME
+
+```{r title="Relationship between child mortality and daily income per capita"}
+plotly_mortality_di
+```
+
+# DATA ACCESS
+
+The data we have used to generate this dashboard have been made available below, downloadable as a csv file.
+
+```{r}
+htmltools::browsable(
+  tagList(
+    reactable(
+      child_mortality_analysis,
+      defaultPageSize = 50,
+      searchable = T,
+      filterable = T,
+      elementId = "child_mortality_table"),
+    
+    tags$button("Download as CSV",
+                onclick = 
+        "Reactable.downloadDataCSV('child_mortality_table')")
+  )
+)
+```
+
+# ABOUT THIS DASHBOARD 
+
+## {.tabset}
+
+### Data source
+
+The data used to build this dashboard originate from the Gapminder Foundation.
+
+The Gapminder Foundation is a non-profit venture registered in Stockholm, Sweden, that promotes sustainable global development and achievement of the United Nations Millennium Development Goals by increased use and understanding of statistics and other information about social, economic, and environmental development at local, national, and global levels.
+
+The Gapminder was founded in 2005 by Ola Rosling, Anna Rosling Rönnlund, and Hans Rosling. The name Gapminder was derived from the "Mind the Gap" warning messages on the London Underground.
+
+If you wish to know more about this Foundation, please visit their Wikipedia webpage available [here](https://en.wikipedia.org/wiki/Gapminder_Foundation).
+
+Gapminder combines data from multiple sources into unique coherent time-series that can’t be found elsewhere.
+
+Most of their data are not good enough for detailed numeric analysis. They are only good enough to revolutionize people’s worldview. More details can be accessed [here](https://www.gapminder.org/data/documentation/).
+
+Two examples of Hans Rosling's videos are embedded below.
+
+<iframe width="560" height="315" src="https://www.youtube.com/embed/hVimVzgtD6w?si=pYn7NCJF2ciq3pYJ" title="YouTube video player" frameborder="0" allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; web-share" referrerpolicy="strict-origin-when-cross-origin" allowfullscreen></iframe>
+
+<iframe width="560" height="315" src="https://www.youtube.com/embed/2LyzBoHo5EI?si=wVh32Y2bn7L9GNbt" title="YouTube video player" frameborder="0" allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; web-share" referrerpolicy="strict-origin-when-cross-origin" allowfullscreen></iframe>
+
+### Dashboard presentation
+
+This dashboard presents the global trends in mortality rate among children aged 0-5 years, covering the period from 2001 to 2023.
+
+It shows the evolution in child mortality rates over these years, highlighting a great improvement in this indicator. However, the latest figures for 2023 reveal that 66 countries are still to meet the SDG 3.2 target which states that child mortality rate should lie below or equal 25/1000 live births. Of note, 46 (69.7%) of these countries are part of the African continent where many children continue to die before their fifth anniversary. The second most affected continent is Asia with 11 countries (16.7%), followed by Oceania (5 countries; 7.6%) and The Americas (4 countries; 6.1%).
+
+Interestingly, we analysed the relationship between child mortality rate on one hand, and total fertility rate, Gross Domestic Product (GDP) per capita, and daily household per capita income (in USD) on the other hand. We showed that countries with high or very high child mortality rates are the ones with the lowest GDPs. In addition, our plots clearly illustrate that countries with higher child mortality rates have higher fertility rates. Similarly, countries with higher mortality rates were the ones with lower average daily household per capita income.
+
+Therefore, the reduction in child mortality rate could be attained by reducing the fertility rate, and acting on macroeconomic indicators such as the daily income and GDP whose increases could help in diminishing the child mortality rate. Countries of the African and Asian continents are those where substantial efforts remain to be implemented. 
